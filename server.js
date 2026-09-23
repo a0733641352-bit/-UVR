@@ -24,7 +24,8 @@ function caller(c){return phone(c?.values?.ApiPhone??c?.req?.query?.ApiPhone??c?
 async function load(){if(!SUP)return;try{const r=await db('/rest/v1/conversations?select=id,created_at,phone,call_id,user_text,gemini_text&order=created_at.desc&limit='+MAX);const a=await r.json();log.splice(0,log.length,...a.reverse().map(x=>({id:String(x.id),time:x.created_at,phone:phone(x.phone),callId:String(x.call_id||''),user:x.user_text||'',gemini:x.gemini_text||''})))}catch(e){console.error('Supabase load',e.message)}}
 async function save(e){if(!SUP)return;try{await db('/rest/v1/conversations',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({phone:e.phone,call_id:e.callId||null,user_text:e.user,gemini_text:e.gemini})})}catch(x){console.error('Supabase save',x.message)}}
 async function add({phone:p,callId,userText,geminiText}){const e={id:Date.now()+'-'+log.length,time:new Date().toISOString(),phone:phone(p),callId:String(callId||''),user:userText||'',gemini:geminiText||''};log.push(e);if(log.length>MAX)log.splice(0,log.length-MAX);await save(e)}
-const clean=t=>String(t||'').replace(/[."“”‘’']/g,' ').replace(/[-–—]/g,' ').replace(/\s+/g,' ').trim();
+const clean=t=>String(t||'').replace(/[^א-תA-Za-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+const yemotText=clean;
 function extractTransfer(text){const raw=String(text||'');return {answer:raw.replace(/TRANSFER_TO:\s*\/?[0-9]+(?:\/[0-9]+)*/ig,'').replace(/\s+/g,' ').trim(),transfer:null};}
 async function timeout(p,ms=TIMEOUT){return await Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('Gemini request timeout')),ms))])}
 function wavMime(){return 'audio/wav'}
