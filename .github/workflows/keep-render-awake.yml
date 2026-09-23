@@ -1,0 +1,15 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  keep-awake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render
+        run: |
+          curl --fail --silent --show-error --max-time 30 https://ai-phone-line-gemini-live.onrender.com/health
+          echo " Render service is awake and responding."
