@@ -10,7 +10,7 @@ app.use((req,res,next)=>{if(req.path==='/yemot')console.log('[YEMOT REQUEST]',re
 
 const apiKeys=(process.env.GEMINI_API_KEYS||process.env.GEMINI_API_KEY||'').split(',').map(x=>x.trim()).filter(Boolean);
 const MODEL=process.env.GEMINI_MODEL||'gemini-2.5-flash';
-const ANSWER_LENGTH=String(process.env.ANSWER_LENGTH||'medium').toLowerCase();
+const ANSWER_LENGTH=String(process.env.ANSWER_LENGTH||'short').toLowerCase();
 const TIMEOUT=Number(process.env.REQUEST_TIMEOUT_MS||60000);
 const SEARCH=/^(1|true|yes)$/i.test(process.env.ENABLE_GOOGLE_SEARCH||'true');
 const clients=apiKeys.map(key=>new GoogleGenAI({apiKey:key}));
