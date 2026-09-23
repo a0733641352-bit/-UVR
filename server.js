@@ -25,7 +25,10 @@ async function load(){if(!SUP)return;try{const r=await db('/rest/v1/conversation
 async function save(e){if(!SUP)return;try{await db('/rest/v1/conversations',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({phone:e.phone,call_id:e.callId||null,user_text:e.user,gemini_text:e.gemini})})}catch(x){console.error('Supabase save',x.message)}}
 async function add({phone:p,callId,userText,geminiText}){const e={id:Date.now()+'-'+log.length,time:new Date().toISOString(),phone:phone(p),callId:String(callId||''),user:userText||'',gemini:geminiText||''};log.push(e);if(log.length>MAX)log.splice(0,log.length-MAX);await save(e)}
 const clean=t=>String(t||'').replace(/[^א-תA-Za-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
-const yemotText=clean;
+function yemotText(t){return clean(t)}
+const YEMOT_TOKEN=String(process.env.YEMOT_API_KEY||'').trim();
+const [YEMOT_NUMBER,YEMOT_PASSWORD]=YEMOT_TOKEN.split(':');
+const yemot=(YEMOT_NUMBER&&YEMOT_PASSWORD)?new YemotApi(YEMOT_NUMBER,YEMOT_PASSWORD):null;
 function extractTransfer(text){const raw=String(text||'');return {answer:raw.replace(/TRANSFER_TO:\s*\/?[0-9]+(?:\/[0-9]+)*/ig,'').replace(/\s+/g,' ').trim(),transfer:null};}
 async function timeout(p,ms=TIMEOUT){return await Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('Gemini request timeout')),ms))])}
 function wavMime(){return 'audio/wav'}
@@ -54,6 +57,7 @@ async function handler(call){
       await call.id_list_message([{type:'text',data:yemotText('שלום, זה ג׳מיניפון. הקלט את השאלה שלך ולאחר מכן הקש סולמית.')}]);
       const path=await call.read([{type:'text',data:yemotText('כעת הקלט את השאלה ולאחר מכן הקש סולמית.')}],'record',{min_length:1,max_length:60,no_confirm_menu:true});
       if(!path) continue;
+      if(!yemot) throw new Error('YEMOT_API_KEY לא מוגדר');
       const downloaded=await yemot.download_file('ivr2:'+path);
       const audio=Buffer.isBuffer(downloaded)?downloaded:Buffer.isBuffer(downloaded?.data)?downloaded.data:Buffer.from(downloaded?.buffer||downloaded||'');
       if(!audio.length) throw new Error('לא התקבלה הקלטה');
