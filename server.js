@@ -72,7 +72,50 @@ app.get('/api/conversations/summary',(q,r)=>{
   r.json({callers,totalCallers:callers.length,totalMessages:log.length});
 });
 app.get('/health',(q,r)=>r.json({ok:true,model:MODEL,geminiConfigured:!!clients.length,supabase:SUP,historyPersistent:SUP,answerLength:ANSWER_LENGTH}));
-app.get('/',(q,r)=>r.type('html').send('<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AI Phone Line</title><body style="font-family:system-ui;max-width:760px;margin:50px auto"><h1>AI Phone Line</h1><p>המערכת פעילה · '+MODEL+'</p><p>/health · /api/conversations · /yemot</p></body></html>'));
+app.get('/',(q,r)=>r.type('html').send(`<!doctype html>
+<html lang="he" dir="rtl">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>ג׳ימיני פלוס · מרכז השיחות</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f7fb;color:#172033}
+header{background:linear-gradient(135deg,#111827,#334155);color:white;padding:28px 5%;display:flex;justify-content:space-between;align-items:center}
+h1{margin:0;font-size:28px}.badge{padding:8px 14px;border-radius:999px;background:#22c55e;color:white;font-size:13px}
+main{max-width:1250px;margin:25px auto;padding:0 18px}.grid{display:grid;grid-template-columns:320px 1fr;gap:18px}
+.card{background:white;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 8px 30px #0000000b;overflow:hidden}
+.toolbar{padding:14px;border-bottom:1px solid #eee;display:flex;gap:8px}.toolbar input{width:100%;padding:11px;border:1px solid #ddd;border-radius:10px}
+.list{max-height:70vh;overflow:auto}.caller{padding:15px;border-bottom:1px solid #f0f0f0;cursor:pointer}.caller:hover,.caller.active{background:#eef6ff}
+.phone{font-weight:700}.count{font-size:12px;color:#64748b;margin-top:4px}
+.messages{padding:20px;max-height:70vh;overflow:auto}.msg{padding:15px;border-radius:14px;margin-bottom:12px;background:#f8fafc}.q{border-right:4px solid #64748b}.a{border-right:4px solid #2563eb}.label{font-size:12px;font-weight:700;color:#64748b;margin-bottom:7px}.time{font-size:11px;color:#94a3b8;margin-top:8px}
+.empty{padding:50px;text-align:center;color:#64748b}
+@media(max-width:800px){.grid{grid-template-columns:1fr}.list{max-height:35vh}}
+</style></head>
+<body>
+<header><div><h1>ג׳ימיני פלוס</h1><div style="opacity:.8;margin-top:5px">מרכז ניהול שיחות AI</div></div><span class="badge">● מערכת פעילה</span></header>
+<main><div class="grid">
+<section class="card"><div class="toolbar"><input id="search" placeholder="חיפוש לפי מספר טלפון..."></div><div id="callers" class="list"><div class="empty">טוען...</div></div></section>
+<section class="card"><div id="messages" class="messages"><div class="empty">בחר מספר טלפון כדי לראות את כל השיחות</div></div></section>
+</div></main>
+<script>
+let data=[],selected='';
+async function load(){
+ const r=await fetch('/api/conversations/summary'); const j=await r.json(); data=j.callers||[]; renderCallers();
+}
+function renderCallers(){
+ const term=document.getElementById('search').value.trim();
+ const box=document.getElementById('callers');
+ const arr=data.filter(x=>x.phone.includes(term));
+ box.innerHTML=arr.length?arr.map(x=>'<div class="caller '+(x.phone===selected?'active':'')+'" onclick="selectCaller(\''+encodeURIComponent(x.phone)+'\')"><div class="phone">'+esc(x.phone)+'</div><div class="count">'+x.messages+' הודעות</div></div>').join(''):'<div class="empty">לא נמצאו מתקשרים</div>';
+}
+async function selectCaller(encoded){
+ selected=decodeURIComponent(encoded); renderCallers();
+ const r=await fetch('/api/conversations?phone='+encodeURIComponent(selected)); const j=await r.json();
+ const box=document.getElementById('messages');
+ box.innerHTML='<div style="padding-bottom:12px"><strong>היסטוריית שיחות: '+esc(selected)+'</strong></div>'+
+ (j.conversations||[]).map(x=>'<div class="msg q"><div class="label">המתקשר</div>'+esc(x.user||'')+'<div class="time">'+new Date(x.time).toLocaleString('he-IL')+'</div></div><div class="msg a"><div class="label">ג׳ימיני פלוס</div>'+esc(x.gemini||'')+'</div>').join('');
+}
+function esc(v){return String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+document.getElementById('search').oninput=renderCallers; load(); setInterval(load,15000);
+</script></body></html>`));
 async function configure(){const token=process.env.YEMOT_API_KEY?.trim(),base=(process.env.PUBLIC_BASE_URL||'').replace(/\/$/,'');if(!token||!base){console.log('Yemot auto setup skipped');return}const qs=new URLSearchParams({token,path:'ivr2:'+(process.env.YEMOT_AI_EXTENSION||'/9'),type:'api',api_link:base+'/yemot'});
 const historyQs=new URLSearchParams({token,path:'ivr2:'+(process.env.YEMOT_HISTORY_EXTENSION||'/8'),type:'api',api_link:base+'/yemot-history'});const r=await fetch('https://www.call2all.co.il/ym/api/UpdateExtension?'+qs);const t=await r.text();if(!r.ok)throw Error('Yemot setup HTTP '+r.status+': '+t);console.log('Yemot AI extension configured');
 const hr=await fetch('https://www.call2all.co.il/ym/api/UpdateExtension?'+historyQs);
