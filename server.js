@@ -75,7 +75,7 @@ app.get('/health',(q,r)=>r.json({ok:true,model:MODEL,geminiConfigured:!!clients.
 app.get('/',(q,r)=>r.type('html').send(`<!doctype html>
 <html lang="he" dir="rtl">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>ג׳ימיני פלוס · מרכז השיחות</title>
+<title>גימיני פון · מרכז השיחות</title>
 <style>
 *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f7fb;color:#172033}
 header{background:linear-gradient(135deg,#111827,#334155);color:white;padding:28px 5%;display:flex;justify-content:space-between;align-items:center}
@@ -90,7 +90,7 @@ main{max-width:1250px;margin:25px auto;padding:0 18px}.grid{display:grid;grid-te
 @media(max-width:800px){.grid{grid-template-columns:1fr}.list{max-height:35vh}}
 </style></head>
 <body>
-<header><div><h1>ג׳ימיני פלוס</h1><div style="opacity:.8;margin-top:5px">מרכז ניהול שיחות AI</div></div><span class="badge">● מערכת פעילה</span></header>
+<header><div><h1>גימיני פון</h1><div style="opacity:.8;margin-top:5px">מרכז ניהול שיחות AI</div></div><span class="badge">● מערכת פעילה</span></header>
 <main><div class="grid">
 <section class="card"><div class="toolbar"><input id="search" placeholder="חיפוש לפי מספר טלפון..."></div><div id="callers" class="list"><div class="empty">טוען...</div></div></section>
 <section class="card"><div id="messages" class="messages"><div class="empty">בחר מספר טלפון כדי לראות את כל השיחות</div></div></section>
@@ -111,7 +111,7 @@ async function selectCaller(encoded){
  const r=await fetch('/api/conversations?phone='+encodeURIComponent(selected)); const j=await r.json();
  const box=document.getElementById('messages');
  box.innerHTML='<div style="padding-bottom:12px"><strong>היסטוריית שיחות: '+esc(selected)+'</strong></div>'+
- (j.conversations||[]).map(x=>'<div class="msg q"><div class="label">המתקשר</div>'+esc(x.user||'')+'<div class="time">'+new Date(x.time).toLocaleString('he-IL')+'</div></div><div class="msg a"><div class="label">ג׳ימיני פלוס</div>'+esc(x.gemini||'')+'</div>').join('');
+ (j.conversations||[]).map(x=>'<div class="msg q"><div class="label">המתקשר</div>'+esc(x.user||'')+'<div class="time">'+new Date(x.time).toLocaleString('he-IL')+'</div></div><div class="msg a"><div class="label">גימיני פון</div>'+esc(x.gemini||'')+'</div>').join('');
 }
 function esc(v){return String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 document.getElementById('search').oninput=renderCallers; load(); setInterval(load,15000);
