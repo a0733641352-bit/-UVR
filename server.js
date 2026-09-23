@@ -54,8 +54,7 @@ async function handler(call){
   active.set(id,{id,phone:p,since:new Date().toISOString()});
   try{
     while(true){
-      await call.id_list_message([{type:'text',data:yemotText('שלום, זה ג׳מיניפון. הקלט את השאלה שלך ולאחר מכן הקש סולמית.')}]);
-      const path=await call.read([{type:'text',data:yemotText('כעת הקלט את השאלה ולאחר מכן הקש סולמית.')}],'record',{min_length:1,max_length:60,no_confirm_menu:true});
+      const path=await call.read([{type:'text',data:yemotText('שלום, זה ג׳מיניפון. הקלט את השאלה שלך ולאחר מכן הקש סולמית.')}],'record',{min_length:1,max_length:60,no_confirm_menu:true,removeInvalidChars:true});
       if(!path) continue;
       if(!yemot) throw new Error('YEMOT_API_KEY לא מוגדר');
       const downloaded=await yemot.download_file('ivr2:'+path);
@@ -63,8 +62,10 @@ async function handler(call){
       if(!audio.length) throw new Error('לא התקבלה הקלטה');
       const answer=await askGemini(audio,p);
       await add({phone:p,callId:id,userText:'[הקלטה]',geminiText:answer});
-      await call.id_list_message([{type:'text',data:yemotText(answer)}]);
-      const key=await call.read([{type:'text',data:yemotText('להמשך השיחה הקישו 1. לסיום השיחה הקישו 2.')}],'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'1',removeInvalidChars:true});
+      const key=await call.read([
+        {type:'text',data:yemotText(answer)},
+        {type:'text',data:yemotText('להמשך השיחה הקישו 1. לסיום השיחה הקישו 2.')}
+      ],'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'1',removeInvalidChars:true});
       if(String(key)==='2') break;
     }
   }catch(e){
