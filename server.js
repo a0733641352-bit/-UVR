@@ -26,6 +26,7 @@ async function save(e){if(!SUP)return;try{await db('/rest/v1/conversations',{met
 async function add({phone:p,callId,userText,geminiText}){const e={id:Date.now()+'-'+log.length,time:new Date().toISOString(),phone:phone(p),callId:String(callId||''),user:userText||'',gemini:geminiText||''};log.push(e);if(log.length>MAX)log.splice(0,log.length-MAX);await save(e)}
 const clean=t=>String(t||'').replace(/[."“”‘’']/g,' ').replace(/[-–—]/g,' ').replace(/\s+/g,' ').trim();
 function extractTransfer(text){const raw=String(text||'');return {answer:raw.replace(/TRANSFER_TO:\s*\/?[0-9]+(?:\/[0-9]+)*/ig,'').replace(/\s+/g,' ').trim(),transfer:null};}
+const router=YemotRouter({printLog:true,defaults:{removeInvalidChars:true,read:{timeout:90000}},uncaughtErrorHandler:e=>console.error('[call]',e?.message||e)});
 router.get('/yemot',handler);
 router.get('/yemot-history',historyHandler);
 app.use(router);
