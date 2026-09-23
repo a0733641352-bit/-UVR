@@ -50,30 +50,30 @@ async function handler(call){
   active.set(id,{id,phone:p,since:new Date().toISOString()});
   try{
     while(true){
-      await call.id_list_message([{type:'text',data:'שלום, זה ג׳מיניפון. הקלט את השאלה שלך ולאחר מכן הקש סולמית.'}]);
-      const path=await call.read([{type:'text',data:'כעת הקלט את השאלה ולאחר מכן הקש סולמית.'}],'record',{min_length:1,max_length:60,no_confirm_menu:true});
+      await call.id_list_message([{type:'text',data:yemotText('שלום, זה ג׳מיניפון. הקלט את השאלה שלך ולאחר מכן הקש סולמית.')}]);
+      const path=await call.read([{type:'text',data:yemotText('כעת הקלט את השאלה ולאחר מכן הקש סולמית.')}],'record',{min_length:1,max_length:60,no_confirm_menu:true});
       if(!path) continue;
       const downloaded=await yemot.download_file('ivr2:'+path);
       const audio=Buffer.isBuffer(downloaded)?downloaded:Buffer.isBuffer(downloaded?.data)?downloaded.data:Buffer.from(downloaded?.buffer||downloaded||'');
       if(!audio.length) throw new Error('לא התקבלה הקלטה');
       const answer=await askGemini(audio,p);
       await add({phone:p,callId:id,userText:'[הקלטה]',geminiText:answer});
-      await call.id_list_message([{type:'text',data:answer}]);
-      const key=await call.read([{type:'text',data:'להמשך השיחה הקישו 1. לסיום השיחה הקישו 2.'}],'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'1',removeInvalidChars:true});
+      await call.id_list_message([{type:'text',data:yemotText(answer)}]);
+      const key=await call.read([{type:'text',data:yemotText('להמשך השיחה הקישו 1. לסיום השיחה הקישו 2.')}],'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'1',removeInvalidChars:true});
       if(String(key)==='2') break;
     }
   }catch(e){
     if(!(e instanceof ExitError)) console.error('[call]',p,e?.message||e);
-    try{await call.id_list_message([{type:'text',data:'אירעה תקלה זמנית. אנא נסו שוב מאוחר יותר.'}])}catch{}
+    try{await call.id_list_message([{type:'text',data:yemotText('אירעה תקלה זמנית. אנא נסו שוב מאוחר יותר.')}])}catch{}
   }finally{active.delete(id)}
 }
 async function historyHandler(call){
   const p=caller(call);
   try{
     const items=log.filter(x=>x.phone===p).slice(-20);
-    if(!items.length){await call.id_list_message([{type:'text',data:'אין עדיין היסטוריית שיחות עבור המספר הזה.'}]);return}
+    if(!items.length){await call.id_list_message([{type:'text',data:yemotText('אין עדיין היסטוריית שיחות עבור המספר הזה.')}]);return}
     const text=items.map((x,i)=>'שיחה '+(i+1)+': '+clean(x.gemini)).join(' | ');
-    await call.id_list_message([{type:'text',data:'היסטוריית השיחות האחרונות: '+text}]);
+    await call.id_list_message([{type:'text',data:yemotText('היסטוריית השיחות האחרונות: '+text)}]);
   }catch(e){if(!(e instanceof ExitError))console.error('[history]',e?.message||e)}
 }
 const router=YemotRouter({printLog:true,defaults:{removeInvalidChars:true,read:{timeout:90000}},uncaughtErrorHandler:e=>console.error('[call]',e?.message||e)});
