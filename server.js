@@ -20,7 +20,13 @@ console.log('[GEMINI SECURITY] API keys loaded: '+clients.length);
 const GEMINI_KEY_COOLDOWN_MS=Number(process.env.GEMINI_KEY_COOLDOWN_MS||60000);
 const GEMINI_MAX_RETRIES=Number(process.env.GEMINI_MAX_RETRIES||1);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+function isProjectQuotaError(e){
+  const status=Number(e?.status||e?.code||e?.response?.status||0);
+  const msg=String(e?.message||e||'').toLowerCase();
+  return status===429 && /generate_content_free_tier_requests|perprojectpermodel|quota exceeded|daily quota/.test(msg);
+}
 function isRetryableGeminiError(e){
+  if(isProjectQuotaError(e)) return false;
   const status=Number(e?.status||e?.code||e?.response?.status||0);
   const msg=String(e?.message||e||'').toLowerCase();
   return status===408||status===429||status===500||status===502||status===503||status===504||
@@ -59,6 +65,9 @@ async function withGeminiFailover(operation){
         errors.push({key:slot.index+1,error:String(e?.message||e||'')});
         markGeminiFailure(slot,e);
         console.error('[GEMINI KEY FAILOVER]',JSON.stringify({key:slot.index+1,status:e?.status||e?.code||null,error:String(e?.message||e||'').slice(0,300),cooldownMs:slot.cooldownUntil-Date.now()}));
+        if(isProjectQuotaError(e)){
+          throw new Error('Gemini project quota exhausted: מכסת Gemini של הפרויקט נגמרה. החלפת API keys לא מגדילה מכסה; יש להפעיל Billing/להעלות Tier בפרויקט Google.');
+        }
         if(!isRetryableGeminiError(e))throw e;
       }
     }
