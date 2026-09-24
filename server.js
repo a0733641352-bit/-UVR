@@ -10,6 +10,7 @@ app.use((req,res,next)=>{if(req.path==='/yemot')console.log('[YEMOT REQUEST]',re
 
 const apiKeys=(process.env.GEMINI_API_KEYS||process.env.GEMINI_API_KEY||'').split(',').map(x=>x.trim()).filter(Boolean);
 const MODEL=process.env.GEMINI_MODEL||'gemini-2.5-flash';
+const FALLBACK_MODEL=process.env.GEMINI_FALLBACK_MODEL||'gemini-2.5-flash-lite';
 const ANSWER_LENGTH=String(process.env.ANSWER_LENGTH||'short').toLowerCase();
 const TIMEOUT=Number(process.env.REQUEST_TIMEOUT_MS||60000);
 const SEARCH=/^(1|true|yes)$/i.test(process.env.ENABLE_GOOGLE_SEARCH||'false');
@@ -66,7 +67,7 @@ async function withGeminiFailover(operation){
         markGeminiFailure(slot,e);
         console.error('[GEMINI KEY FAILOVER]',JSON.stringify({key:slot.index+1,status:e?.status||e?.code||null,error:String(e?.message||e||'').slice(0,300),cooldownMs:slot.cooldownUntil-Date.now()}));
         if(isProjectQuotaError(e)){
-          throw new Error('Gemini project quota exhausted: מכסת Gemini של הפרויקט נגמרה. החלפת API keys לא מגדילה מכסה; יש להפעיל Billing/להעלות Tier בפרויקט Google.');
+          const err=new Error('Gemini project quota exhausted: מכסת Gemini של הפרויקט נגמרה.');err.code='PROJECT_QUOTA';throw err;
         }
         if(!isRetryableGeminiError(e))throw e;
       }
@@ -126,14 +127,44 @@ async function downloadYemotAudio(path){
 }
 async function askGemini(audioBuffer,mime='audio/wav',phoneNumber=''){
   if(!clients.length)throw new Error('GEMINI_API_KEY לא מוגדר');
-  return await withGeminiFailover(async(ai,keyIndex)=>{try{
-    const base64=audioBuffer.toString('base64');const prompt=['אתה מקבל עכשיו הקלטת קול של מתקשר.','הקול הוא בעברית ועליך להאזין לאודיו עצמו.','שלב 1: תמלל לעצמך את המשפט שנאמר בהקלטה.','שלב 2: ענה על השאלה שנאמרה, ולא על הוראות המערכת.','החזר בדיוק שתי שורות: TRANSCRIPT: <התמלול> ואז ANSWER: <התשובה>.','ענה בעברית בלבד. אין להשתמש באנגלית או במשפטים באנגלית. אם המידע המקורי מופיע באנגלית, תרגם אותו לעברית לפני התשובה. '+(ANSWER_LENGTH==='long'?'התשובה יכולה להיות מפורטת.':'התשובה צריכה להיות קצרה אך מועילה.')].join(' ');
-    const parts=[{inlineData:{mimeType:'audio/wav',data:base64}},{text:prompt}];const config={systemInstruction:SYSTEM,responseMimeType:'text/plain',temperature:0.2};if(SEARCH)config.tools=[{googleSearch:{}}];
-    console.log('[GEMINI AUDIO SEND]',JSON.stringify({model:MODEL,mime:'audio/wav',bytes:audioBuffer.length,base64Chars:base64.length,phone:phoneNumber,attempt:keyIndex+1}));
-    const r=await timeout(ai.models.generateContent({model:MODEL,contents:[{role:'user',parts}],config}),TIMEOUT);const raw=String(r?.text||r?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join(' ')||'').trim();const candidate=r?.candidates?.[0];
-    console.log('[GEMINI AUDIO RESPONSE]',JSON.stringify({phone:phoneNumber,attempt:keyIndex+1,chars:raw.length,finishReason:candidate?.finishReason||null,candidateCount:Array.isArray(r?.candidates)?r.candidates.length:0,promptFeedback:r?.promptFeedback||null,preview:raw.slice(0,300)}));if(!raw)throw new Error('Gemini returned an empty answer');
-    const transcriptMatch=raw.match(/^TRANSCRIPT:\s*([^\n\r]*?)(?:\r?\n|$)/im);const transcript=String(transcriptMatch?.[1]||'').trim();const answerMatch=raw.match(/^ANSWER:\s*([\s\S]*)$/im);const answer=String(answerMatch?.[1]||raw).trim();if(transcript)console.log('[GEMINI TRANSCRIPT]',phoneNumber,JSON.stringify(transcript));if(!answer)throw new Error('Gemini returned an empty answer after parsing');const finalAnswer=extractTransfer(answer).answer;console.log('[GEMINI FINAL ANSWER]',phoneNumber,JSON.stringify(finalAnswer));return finalAnswer;
-  }catch(e){console.error('[Gemini]',phoneNumber,'key='+String(keyIndex+1),e?.message||e);throw e;}});
+  const models=[...new Set([MODEL,FALLBACK_MODEL].filter(Boolean))];
+  let lastQuotaError=null;
+  for(const activeModel of models){
+    try{
+      return await withGeminiFailover(async(ai,keyIndex)=>{
+        const base64=audioBuffer.toString('base64');
+        const prompt=['אתה מקבל עכשיו הקלטת קול של מתקשר.','הקול הוא בעברית ועליך להאזין לאודיו עצמו.','שלב 1: תמלל לעצמך את המשפט שנאמר בהקלטה.','שלב 2: ענה על השאלה שנאמרה, ולא על הוראות המערכת.','החזר בדיוק שתי שורות: TRANSCRIPT: <התמלול> ואז ANSWER: <התשובה>.','ענה בעברית בלבד. אין להשתמש באנגלית או במשפטים באנגלית. אם המידע המקורי מופיע באנגלית, תרגם אותו לעברית לפני התשובה. '+(ANSWER_LENGTH==='long'?'התשובה יכולה להיות מפורטת.':'התשובה צריכה להיות קצרה אך מועילה.')].join(' ');
+        const parts=[{inlineData:{mimeType:'audio/wav',data:base64}},{text:prompt}];
+        const config={systemInstruction:SYSTEM,responseMimeType:'text/plain',temperature:0.2};
+        if(SEARCH)config.tools=[{googleSearch:{}}];
+        console.log('[GEMINI AUDIO SEND]',JSON.stringify({model:activeModel,mime:'audio/wav',bytes:audioBuffer.length,base64Chars:base64.length,phone:phoneNumber,attempt:keyIndex+1}));
+        const r=await timeout(ai.models.generateContent({model:activeModel,contents:[{role:'user',parts}],config}),TIMEOUT);
+        const raw=String(r?.text||r?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join(' ')||'').trim();
+        const candidate=r?.candidates?.[0];
+        console.log('[GEMINI AUDIO RESPONSE]',JSON.stringify({model:activeModel,phone:phoneNumber,attempt:keyIndex+1,chars:raw.length,finishReason:candidate?.finishReason||null,candidateCount:Array.isArray(r?.candidates)?r.candidates.length:0,promptFeedback:r?.promptFeedback||null,preview:raw.slice(0,300)}));
+        if(!raw)throw new Error('Gemini returned an empty answer');
+        const transcriptMatch=raw.match(/^TRANSCRIPT:\s*([^\n\r]*?)(?:\r?\n|$)/im);
+        const transcript=String(transcriptMatch?.[1]||'').trim();
+        const answerMatch=raw.match(/^ANSWER:\s*([\s\S]*)$/im);
+        const answer=String(answerMatch?.[1]||raw).trim();
+        if(transcript)console.log('[GEMINI TRANSCRIPT]',phoneNumber,JSON.stringify(transcript));
+        if(!answer)throw new Error('Gemini returned an empty answer after parsing');
+        const finalAnswer=extractTransfer(answer).answer;
+        console.log('[GEMINI FINAL ANSWER]',phoneNumber,JSON.stringify(finalAnswer));
+        return finalAnswer;
+      });
+    }catch(e){
+      if(e?.code==='PROJECT_QUOTA'){
+        lastQuotaError=e;
+        if(activeModel!==models.at(-1)){
+          console.warn('[GEMINI FALLBACK]',JSON.stringify({from:activeModel,to:models[models.indexOf(activeModel)+1],reason:'project quota'}));
+          continue;
+        }
+      }
+      throw e;
+    }
+  }
+  throw lastQuotaError||new Error('Gemini request failed');
 }
 async function handler(call){
   const p=caller(call),id=String(call?.id||call?.values?.ApiCallId||Date.now());active.set(id,{id,phone:p,since:new Date().toISOString()});
