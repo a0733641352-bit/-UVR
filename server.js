@@ -93,7 +93,7 @@ async function askGemini(audioBuffer,mime='audio/wav',phoneNumber=''){
   for(let i=0;i<clients.length;i++){
     try{
       const ai=clients[i];
-      const parts=[{text:'הקלטה זו מכילה את השאלה של המתקשר. קודם כל הבן את תוכן ההקלטה ורק לאחר מכן ענה על השאלה. אל תשתמש במשפט "אריה AI פיתח אותי" אלא אם השאלה עוסקת במפורש בזהות המפתח או היוצר של המערכת. אם השאלה ברורה, ענה עליה ישירות בעברית. אם ההקלטה אינה מובנת, אמור: "לא הצלחתי להבין את השאלה, אנא הקלט שוב." '+(ANSWER_LENGTH==='long'?'תן תשובה מפורטת.':'ענה בקצרה אך בצורה מועילה.')},{inlineData:{mimeType,data:audioBuffer.toString('base64')}}];
+      const parts=[{text:'הקלטה זו מכילה את השאלה של המתקשר. קודם כל הבן את תוכן ההקלטה ורק לאחר מכן ענה על השאלה. אל תשתמש במשפט "אריה AI פיתח אותי" אלא אם השאלה עוסקת במפורש בזהות המפתח או היוצר של המערכת. אם השאלה ברורה, ענה עליה ישירות בעברית. אם ההקלטה אינה מובנת, אמור: "לא הצלחתי להבין את השאלה, אנא הקלט שוב." '+(ANSWER_LENGTH==='long'?'תן תשובה מפורטת.':'ענה בקצרה אך בצורה מועילה.')},{inlineData:{mimeType:mime,data:audioBuffer.toString('base64')}}];
       const config={systemInstruction:SYSTEM};
       if(SEARCH) config.tools=[{googleSearch:{}}];
       const r=await timeout(ai.models.generateContent({model:MODEL,contents:[{role:'user',parts}],config}),TIMEOUT);
