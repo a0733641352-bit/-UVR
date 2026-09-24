@@ -133,8 +133,9 @@ async function askGemini(audioBuffer,mime='audio/wav',phoneNumber=''){
     try{
       return await withGeminiFailover(async(ai,keyIndex)=>{
         const base64=audioBuffer.toString('base64');
-        const recent=log.filter(x=>x.phone===phoneNumber).slice(-4).map(x=>({user:x.user||'',assistant:x.gemini||''})); const context=recent.length?'\nהקשר מהשיחות הקודמות עם המתקשר:\n'+recent.map((x,i)=>'שיחה '+(i+1)+': מתקשר: '+x.user+' | עוזר: '+x.assistant).join('\n'):''; const prompt=['האזן להקלטת הקול עצמה ונסה להבין את כוונת המתקשר, לא רק לזהות מילים בודדות.','העברית יכולה להיות מדוברת, מהירה, עם מבטא, שגיאות הגייה, מילים שנבלעות או רעש רקע. השתמש בהקשר כדי להשלים משמעות רק כאשר היא סבירה וברורה.','אם יש ספק אמיתי לגבי מילה או הכוונה, אל תמציא; בקש מהמתקשר לחזור או להבהיר.','בדוק האם השאלה מתייחסת לתשובה קודמת והשתמש בהקשר שסופק.','שלב 1: תמלל לעצמך את מה שנאמר. שלב 2: הבן את הכוונה. שלב 3: ענה תשובה מדויקת, ברורה וטבעית להקראה בטלפון.','החזר בדיוק שתי שורות: TRANSCRIPT: <התמלול> ואז ANSWER: <התשובה>.','ענה בעברית בלבד. '+(ANSWER_LENGTH==='long'?'התשובה יכולה להיות מפורטת.':'התשובה צריכה להיות קצרה אך מועילה.')+context].join(' ');
-        const parts=[{inlineData:{mimeType:'audio/wav',data:base64}},{text:prompt}];
+        const recent=log.filter(x=>x.phone===phoneNumber && x.user && x.user!=='[הקלטה]').slice(-4).map(x=>({user:x.user||'',assistant:x.gemini||''})); const context=recent.length?'\nהקשר מהשיחות הקודמות עם המתקשר:\n'+recent.map((x,i)=>'שיחה '+(i+1)+': מתקשר: '+x.user+' | עוזר: '+x.assistant).join('\n'):''; const prompt=['האזן להקלטת הקול עצמה ונסה להבין את כוונת המתקשר, לא רק לזהות מילים בודדות.','העברית יכולה להיות מדוברת, מהירה, עם מבטא, שגיאות הגייה, מילים שנבלעות או רעש רקע. השתמש בהקשר כדי להשלים משמעות רק כאשר היא סבירה וברורה.','אם יש ספק אמיתי לגבי מילה או הכוונה, אל תמציא; בקש מהמתקשר לחזור או להבהיר.','בדוק האם השאלה מתייחסת לתשובה קודמת והשתמש בהקשר שסופק.','שלב 1: תמלל לעצמך את מה שנאמר. שלב 2: הבן את הכוונה. שלב 3: ענה תשובה מדויקת, ברורה וטבעית להקראה בטלפון.','החזר בדיוק שתי שורות: TRANSCRIPT: <התמלול> ואז ANSWER: <התשובה>.','ענה בעברית בלבד. '+(ANSWER_LENGTH==='long'?'התשובה יכולה להיות מפורטת.':'התשובה צריכה להיות קצרה אך מועילה.')+context].join(' ');
+        const safeMime=/^audio\/(wav|mpeg|mp3|ogg|flac|aac|aiff|m4a|webm|opus|alaw|mulaw|l16)$/i.test(String(mime||''))?String(mime):'audio/wav';
+        const parts=[{inlineData:{mimeType:safeMime,data:base64}},{text:prompt}];
         const config={systemInstruction:SYSTEM,responseMimeType:'text/plain',temperature:0.1};
         if(SEARCH)config.tools=[{googleSearch:{}}];
         console.log('[GEMINI AUDIO SEND]',JSON.stringify({model:activeModel,mime:'audio/wav',bytes:audioBuffer.length,base64Chars:base64.length,phone:phoneNumber,attempt:keyIndex+1}));
@@ -151,7 +152,7 @@ async function askGemini(audioBuffer,mime='audio/wav',phoneNumber=''){
         if(!answer)throw new Error('Gemini returned an empty answer after parsing');
         const finalAnswer=extractTransfer(answer).answer;
         console.log('[GEMINI FINAL ANSWER]',phoneNumber,JSON.stringify(finalAnswer));
-        return finalAnswer;
+        return {answer:finalAnswer,transcript};
       });
     }catch(e){
       if(e?.code==='PROJECT_QUOTA'){
@@ -169,7 +170,7 @@ async function askGemini(audioBuffer,mime='audio/wav',phoneNumber=''){
 async function handler(call){
   const p=caller(call),id=String(call?.id||call?.values?.ApiCallId||Date.now());active.set(id,{id,phone:p,since:new Date().toISOString()});
   try{while(true){console.log('[YEMOT RECORD] waiting',p);const path=await call.read([{type:'text',data:yemotText('שלום, זה ג׳מיניפון. הקלט את השאלה שלך ולאחר מכן הקש סולמית.')}],'record',{min_length:1,max_length:60,no_confirm_menu:true,removeInvalidChars:true});console.log('[YEMOT RECORD] received',p,JSON.stringify(path));if(!path)continue;if(!yemot)throw new Error('YEMOT_API_KEY לא מוגדר');
-    const downloaded=await downloadYemotAudio(path),originalAudio=downloaded.buffer,audio=resampleWavTo16k(originalAudio);if(audio!==originalAudio)console.log('[AUDIO RESAMPLE]',JSON.stringify({from:downloaded.info?.fmt?.sampleRate||0,to:16000,bytesIn:originalAudio.length,bytesOut:audio.length}));const answer=await askGemini(audio,downloaded.mime,p);await add({phone:p,callId:id,userText:'[הקלטה]',geminiText:answer});
+    const downloaded=await downloadYemotAudio(path),originalAudio=downloaded.buffer,audio=resampleWavTo16k(originalAudio);if(audio!==originalAudio)console.log('[AUDIO RESAMPLE]',JSON.stringify({from:downloaded.info?.fmt?.sampleRate||0,to:16000,bytesIn:originalAudio.length,bytesOut:audio.length}));const answerResult=await askGemini(audio,downloaded.mime,p);const answer=answerResult.answer;await add({phone:p,callId:id,userText:answerResult.transcript||'[הקלטה]',geminiText:answer});
     const answerMessages=splitForYemot(answer,700).map(part=>({type:'text',data:part}));answerMessages.push({type:'text',data:yemotText('להמשך השיחה הקישו 1. לסיום השיחה הקישו 2.')});console.log('[Gemini answer]',p,'chars='+answer.length,'chunks='+answerMessages.length);console.log('[YEMOT OUT]',p,'chars='+answer.length,'answer='+JSON.stringify(answer));
     const key=await call.read(answerMessages,'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'1',removeInvalidChars:true});console.log('[YEMOT INPUT]',p,'key='+JSON.stringify(key));if(String(key)==='2')break;
   }}catch(e){console.error('[CALL ERROR]',p,e?.stack||e?.message||e);if(!(e instanceof ExitError))console.error('[call]',p,e?.message||e);try{await call.id_list_message([{type:'text',data:yemotText('אירעה תקלה זמנית. אנא נסו שוב מאוחר יותר.')}])}catch{}}finally{active.delete(id)}
