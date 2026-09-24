@@ -41,11 +41,16 @@ function markGeminiSuccess(slot){slot.failures=0;slot.lastError='';slot.cooldown
 async function withGeminiFailover(operation){
   if(!clients.length)throw new Error('GEMINI_API_KEY לא מוגדר');
   const errors=[];
-  for(let round=0;round<Math.max(1,GEMINI_MAX_RETRIES+1);round++){
+  const totalRounds=Math.max(1,GEMINI_MAX_RETRIES+1);
+  for(let round=0;round<totalRounds;round++){
     const now=Date.now();
     const ordered=[...clients].sort((a,b)=>a.cooldownUntil-b.cooldownUntil);
+    let attempted=false;
+    let maxWait=0;
     for(const slot of ordered){
-      if(slot.cooldownUntil>now)continue;
+      const remaining=slot.cooldownUntil-Date.now();
+      if(remaining>0){maxWait=Math.max(maxWait,remaining);continue;}
+      attempted=true;
       try{
         const result=await operation(slot.client,slot.index);
         markGeminiSuccess(slot);
@@ -57,11 +62,15 @@ async function withGeminiFailover(operation){
         if(!isRetryableGeminiError(e))throw e;
       }
     }
-    const next=clients.filter(x=>x.cooldownUntil>Date.now()).sort((a,b)=>a.cooldownUntil-b.cooldownUntil)[0];
-    if(next){
-      const wait=Math.min(Math.max(0,next.cooldownUntil-Date.now()),15000);
-      if(wait>0)await sleep(wait);
+    if(!attempted && maxWait>0){
+      await sleep(Math.min(maxWait,60000));
+    }else if(round<totalRounds-1){
+      await sleep(Math.min(1000*Math.pow(2,round),5000));
     }
+  }
+  const quotaErrors=errors.filter(x=>/429|resource_exhausted|quota|rate.?limit/i.test(x.error));
+  if(quotaErrors.length===clients.length){
+    throw new Error('Gemini quota exhausted: כל מפתחות Gemini חזרו עם 429. המפתחות חולקים מכסה לפי פרויקט.');
   }
   throw new Error('כל מפתחות Gemini הזמינים נכשלו: '+errors.map(x=>'מפתח '+x.key).join(', '));
 }
