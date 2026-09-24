@@ -26,6 +26,7 @@ async function save(e){if(!SUP)return;try{await db('/rest/v1/conversations',{met
 async function add({phone:p,callId,userText,geminiText}){const e={id:Date.now()+'-'+log.length,time:new Date().toISOString(),phone:phone(p),callId:String(callId||''),user:userText||'',gemini:geminiText||''};log.push(e);if(log.length>MAX)log.splice(0,log.length-MAX);await save(e)}
 const clean=t=>String(t||'').replace(/[^א-תA-Za-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
 function yemotText(t){return clean(t)}
+function splitForYemot(text,max=700){const s=clean(text);if(!s)return [];const out=[];let rest=s;while(rest.length>max){let cut=rest.lastIndexOf(' ',max);if(cut<300)cut=max;out.push(rest.slice(0,cut).trim());rest=rest.slice(cut).trim()}if(rest)out.push(rest);return out}
 const YEMOT_TOKEN=String(process.env.YEMOT_API_KEY||'').trim();
 const [YEMOT_NUMBER,YEMOT_PASSWORD]=YEMOT_TOKEN.split(':');
 const yemot=(YEMOT_NUMBER&&YEMOT_PASSWORD)?new YemotApi(YEMOT_NUMBER,YEMOT_PASSWORD):null;
@@ -62,10 +63,10 @@ async function handler(call){
       if(!audio.length) throw new Error('לא התקבלה הקלטה');
       const answer=await askGemini(audio,p);
       await add({phone:p,callId:id,userText:'[הקלטה]',geminiText:answer});
-      const key=await call.read([
-        {type:'text',data:yemotText(answer)},
-        {type:'text',data:yemotText('להמשך השיחה הקישו 1. לסיום השיחה הקישו 2.')}
-      ],'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'1',removeInvalidChars:true});
+      const answerMessages=splitForYemot(answer,700).map(part=>({type:'text',data:part}));
+      answerMessages.push({type:'text',data:yemotText('להמשך השיחה הקישו 1. לסיום השיחה הקישו 2.')});
+      console.log('[Gemini answer]',p,'chars='+answer.length,'chunks='+answerMessages.length);
+      const key=await call.read(answerMessages,'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'1',removeInvalidChars:true});
       if(String(key)==='2') break;
     }
   }catch(e){
