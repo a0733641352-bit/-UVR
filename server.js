@@ -9,10 +9,12 @@ app.use(express.json());
 app.use((req,res,next)=>{if(req.path==='/yemot')console.log('[YEMOT REQUEST]',req.method,req.originalUrl);next()});
 
 const apiKeys=(process.env.GEMINI_API_KEYS||process.env.GEMINI_API_KEY||'').split(',').map(x=>x.trim()).filter(Boolean);
-const MODEL=process.env.GEMINI_MODEL||'gemini-2.5-flash';
-const FALLBACK_MODEL=process.env.GEMINI_FALLBACK_MODEL||'gemini-2.5-flash-lite';
+const MODEL=process.env.GEMINI_MODEL||'gemini-3.8-flash';
+const FALLBACK_MODEL=process.env.GEMINI_FALLBACK_MODEL||'gemini-3.8-flash';
 const ANSWER_LENGTH=String(process.env.ANSWER_LENGTH||'short').toLowerCase();
-const TIMEOUT=Number(process.env.REQUEST_TIMEOUT_MS||60000);
+const MAX_RECORD_SECONDS=Math.max(5,Math.min(120,Number(process.env.MAX_RECORD_SECONDS||60)));
+const MAX_AUDIO_BYTES=Number(process.env.MAX_AUDIO_BYTES||20*1024*1024);
+const TIMEOUT=Number(process.env.REQUEST_TIMEOUT_MS||30000);
 const SEARCH=/^(1|true|yes)$/i.test(process.env.ENABLE_GOOGLE_SEARCH||'false');
 const TIMEZONE='Asia/Jerusalem';
 process.env.TZ=TIMEZONE;
@@ -131,7 +133,7 @@ function resampleWavTo16k(buffer){
 async function downloadYemotAudio(path){
   if(!YEMOT_TOKEN)throw new Error('YEMOT_API_KEY לא מוגדר');
   const url='https://www.call2all.co.il/ym/api/DownloadFile?'+new URLSearchParams({token:YEMOT_TOKEN,path:'ivr2:'+String(path)});const r=await fetch(url,{signal:AbortSignal.timeout(30000)});if(!r.ok)throw new Error('Yemot DownloadFile HTTP '+r.status);const b=Buffer.from(await r.arrayBuffer());const info=detectAudio(b);
-  console.log('[AUDIO]',JSON.stringify({path,size:b.length,kind:info.kind,mime:info.mime,format:info.fmt||null,dataBytes:info.dataBytes||0}));if(!b.length)throw new Error('הקלטה ריקה');if(info.kind==='unknown')throw new Error('פורמט אודיו לא מזוהה');return{buffer:b,mime:info.mime,info};
+  console.log('[AUDIO]',JSON.stringify({path,size:b.length,kind:info.kind,mime:info.mime,format:info.fmt||null,dataBytes:info.dataBytes||0}));if(!b.length)throw new Error('הקלטה ריקה');if(b.length>MAX_AUDIO_BYTES)throw new Error('ההקלטה ארוכה או גדולה מדי');if(info.kind==='unknown')throw new Error('פורמט אודיו לא מזוהה');return{buffer:b,mime:info.mime,info};
 }
 async function askGemini(audioBuffer,mime='audio/wav',phoneNumber=''){
   if(!clients.length)throw new Error('GEMINI_API_KEY לא מוגדר');
@@ -181,13 +183,20 @@ async function askGemini(audioBuffer,mime='audio/wav',phoneNumber=''){
   }
   throw lastQuotaError||new Error('Gemini request failed');
 }
+function userFacingError(e){
+  const code=String(e?.code||'');
+  if(code==='PROJECT_QUOTA'||code==='PROJECT_QUOTA_COOLDOWN') return 'שירות הבינה המלאכותית הגיע כרגע למגבלת השימוש שלו. אנא נסו שוב מאוחר יותר.';
+  if(/timeout/i.test(String(e?.message||''))) return 'העיבוד התארך מהרגיל. אנא נסו שוב בשאלה קצרה יותר.';
+  if(/הקלטה|audio|פורמט/i.test(String(e?.message||''))) return 'לא הצלחתי לקרוא את ההקלטה. אנא הקליטו שוב בצורה ברורה.';
+  return 'לא הצלחתי לעבד את השאלה כרגע. אנא נסו שוב.';
+}
 async function handler(call){
   const p=caller(call),id=String(call?.id||call?.values?.ApiCallId||Date.now());active.set(id,{id,phone:p,since:new Date().toISOString()});
-  try{while(true){console.log('[YEMOT RECORD] waiting',p);const path=await call.read([{type:'text',data:yemotText('שלום, זה ג׳מיניפון. הקלט את השאלה שלך ולאחר מכן הקש סולמית.')}],'record',{min_length:1,max_length:60,no_confirm_menu:true,removeInvalidChars:true});console.log('[YEMOT RECORD] received',p,JSON.stringify(path));if(!path)continue;if(!yemot)throw new Error('YEMOT_API_KEY לא מוגדר');
+  try{while(true){console.log('[YEMOT RECORD] waiting',p);const path=await call.read([{type:'text',data:yemotText('שלום, הקלט את השאלה שלך ולאחר מכן הקש סולמית.')}],'record',{min_length:1,max_length:MAX_RECORD_SECONDS,no_confirm_menu:true,removeInvalidChars:true});console.log('[YEMOT RECORD] received',p,JSON.stringify(path));if(!path)continue;if(!yemot)throw new Error('YEMOT_API_KEY לא מוגדר');
     const downloaded=await downloadYemotAudio(path),originalAudio=downloaded.buffer,audio=resampleWavTo16k(originalAudio);if(audio!==originalAudio)console.log('[AUDIO RESAMPLE]',JSON.stringify({from:downloaded.info?.fmt?.sampleRate||0,to:16000,bytesIn:originalAudio.length,bytesOut:audio.length}));const answerResult=await askGemini(audio,downloaded.mime,p);const answer=answerResult.answer;if(!answer){throw new Error('Gemini returned no playable answer');}await add({phone:p,callId:id,userText:answerResult.transcript||'[הקלטה]',geminiText:answer});
     const answerMessages=splitForYemot(answer,700).map(part=>({type:'text',data:part}));answerMessages.push({type:'text',data:yemotText('להמשך השיחה הקישו 1. לסיום השיחה הקישו 2. אם לא הוקשה בחירה, השיחה תסתיים כדי למנוע חזרה על התשובה.')});console.log('[Gemini answer]',p,'chars='+answer.length,'chunks='+answerMessages.length);console.log('[YEMOT OUT]',p,'chars='+answer.length,'answer='+JSON.stringify(answer));
     const key=await call.read(answerMessages,'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'2',removeInvalidChars:true});console.log('[YEMOT INPUT]',p,'key='+JSON.stringify(key));if(String(key)==='2'||String(key)==='')break;
-  }}catch(e){console.error('[CALL ERROR]',p,e?.stack||e?.message||e);if(!(e instanceof ExitError))console.error('[call]',p,e?.message||e);try{await call.id_list_message([{type:'text',data:yemotText('שירות הבינה המלאכותית אינו זמין כרגע בגלל מכסת שימוש. אנא נסו שוב מאוחר יותר.')}])}catch{}}finally{active.delete(id)}
+  }}catch(e){console.error('[CALL ERROR]',p,e?.stack||e?.message||e);if(!(e instanceof ExitError))console.error('[call]',p,e?.message||e);try{await call.id_list_message([{type:'text',data:yemotText(userFacingError(e))}])}catch{} }finally{active.delete(id)}
 }
 async function historyHandler(call){const p=caller(call);try{const items=log.filter(x=>x.phone===p).slice(-20);if(!items.length){await call.id_list_message([{type:'text',data:yemotText('אין עדיין היסטוריית שיחות עבור המספר הזה.')}]);return}const text=items.map((x,i)=>'שיחה '+(i+1)+': '+clean(x.gemini)).join(' | ');await call.id_list_message([{type:'text',data:yemotText('היסטוריית השיחות האחרונות: '+text)}])}catch(e){if(!(e instanceof ExitError))console.error('[history]',e?.message||e)}}
 const router=YemotRouter({
@@ -196,7 +205,7 @@ const router=YemotRouter({
   uncaughtErrorHandler:async(e,call)=>{
     console.error('[YEMOT UNCaught]',call?.callId||'unknown',e?.stack||e?.message||e);
     try{
-      return await call.id_list_message([{type:'text',data:yemotText('אירעה תקלה זמנית. אנא נסו שוב.')}]);
+      return await call.id_list_message([{type:'text',data:yemotText(userFacingError(e))}]);
     }catch(x){
       console.error('[YEMOT ERROR RESPONSE]',x?.stack||x?.message||x);
     }
@@ -205,7 +214,7 @@ const router=YemotRouter({
 router.get('/yemot',handler);router.get('/yemot-history',historyHandler);app.use(router);
 app.get('/api/conversations',(q,r)=>{const phoneFilter=String(q.query.phone||'').trim();const items=phoneFilter?log.filter(x=>x.phone===phoneFilter):log;const callers=[...new Set(log.map(x=>x.phone))].map(phone=>({phone,messages:log.filter(x=>x.phone===phone).length,lastMessage:log.filter(x=>x.phone===phone).at(-1)?.time||null}));r.json({conversations:items,callers,activeCalls:[...active.values()],totalMessages:items.length,totalCallers:callers.length,serverTime:new Date().toISOString(),model:MODEL,answerLength:ANSWER_LENGTH,historyPersistent:SUP})});
 app.get('/api/conversations/summary',(q,r)=>{const callers=[...new Set(log.map(x=>x.phone))].map(phone=>({phone,messages:log.filter(x=>x.phone===phone).length,history:log.filter(x=>x.phone===phone)}));r.json({callers,totalCallers:callers.length,totalMessages:log.length})});
-app.get('/health',(q,r)=>r.json({ok:true,model:MODEL,geminiConfigured:!!clients.length,geminiKeySlots:clients.length,supabase:SUP,historyPersistent:SUP,answerLength:ANSWER_LENGTH,timezone:TIMEZONE}));
+app.get('/health',(q,r)=>r.json({ok:true,model:MODEL,fallbackModel:FALLBACK_MODEL,geminiConfigured:!!clients.length,geminiKeySlots:clients.length,projectQuotaCooldown:Date.now()<projectQuotaCooldownUntil,supabase:SUP,historyPersistent:SUP,answerLength:ANSWER_LENGTH,timezone:TIMEZONE,maxRecordSeconds:MAX_RECORD_SECONDS}));
 app.get('/',(q,r)=>r.type('html').send('<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>גימיני פון · מרכז השיחות</title></head><body><h1>גימיני פון</h1></body></html>'));
 async function configure(){const token=process.env.YEMOT_API_KEY?.trim(),base=(process.env.PUBLIC_BASE_URL||'').replace(/\/$/,'');if(!token||!base){console.log('Yemot auto setup skipped');return}const qs=new URLSearchParams({token,path:'ivr2:'+(process.env.YEMOT_AI_EXTENSION||'/9'),type:'api',api_link:base+'/yemot'});const historyQs=new URLSearchParams({token,path:'ivr2:'+(process.env.YEMOT_HISTORY_EXTENSION||'/8'),type:'api',api_link:base+'/yemot-history'});const r=await fetch('https://www.call2all.co.il/ym/api/UpdateExtension?'+qs);const t=await r.text();if(!r.ok)throw Error('Yemot setup HTTP '+r.status+': '+t);console.log('Yemot AI extension configured');const hr=await fetch('https://www.call2all.co.il/ym/api/UpdateExtension?'+historyQs);const ht=await hr.text();if(!hr.ok)throw Error('Yemot history setup HTTP '+hr.status+': '+ht);console.log('Yemot history extension configured')}
 process.on('unhandledRejection',e=>{if(!(e instanceof ExitError))console.error(e)});process.on('uncaughtException',e=>{if(!(e instanceof ExitError))console.error(e)});
