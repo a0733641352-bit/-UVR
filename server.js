@@ -16,6 +16,7 @@ const SEARCH=/^(1|true|yes)$/i.test(process.env.ENABLE_GOOGLE_SEARCH||'false');
 const TIMEZONE=process.env.TZ||'Asia/Jerusalem';
 process.env.TZ=TIMEZONE;
 const clients=apiKeys.map((key,index)=>({index,client:new GoogleGenAI({apiKey:key}),cooldownUntil:0,failures:0,lastError:''}));
+console.log('[GEMINI SECURITY] API keys loaded: '+clients.length);
 const GEMINI_KEY_COOLDOWN_MS=Number(process.env.GEMINI_KEY_COOLDOWN_MS||60000);
 const GEMINI_MAX_RETRIES=Number(process.env.GEMINI_MAX_RETRIES||1);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
