@@ -21,6 +21,8 @@ const clients=apiKeys.map((key,index)=>({index,client:new GoogleGenAI({apiKey:ke
 console.log('[GEMINI SECURITY] API keys loaded: '+clients.length);
 const GEMINI_KEY_COOLDOWN_MS=Number(process.env.GEMINI_KEY_COOLDOWN_MS||60000);
 const GEMINI_MAX_RETRIES=Number(process.env.GEMINI_MAX_RETRIES||1);
+let projectQuotaCooldownUntil=0;
+let projectQuotaMessage='';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function isProjectQuotaError(e){
   const status=Number(e?.status||e?.code||e?.response?.status||0);
@@ -48,6 +50,9 @@ function markGeminiFailure(slot,e){
 function markGeminiSuccess(slot){slot.failures=0;slot.lastError='';slot.cooldownUntil=0;}
 async function withGeminiFailover(operation){
   if(!clients.length)throw new Error('GEMINI_API_KEY לא מוגדר');
+  if(Date.now()<projectQuotaCooldownUntil){
+    throw Object.assign(new Error(projectQuotaMessage||'מכסת Gemini של הפרויקט זמינה כרגע רק לאחר איפוס המכסה.'),{code:'PROJECT_QUOTA_COOLDOWN'});
+  }
   const errors=[];
   const totalRounds=Math.max(1,GEMINI_MAX_RETRIES+1);
   for(let round=0;round<totalRounds;round++){
@@ -68,7 +73,9 @@ async function withGeminiFailover(operation){
         markGeminiFailure(slot,e);
         console.error('[GEMINI KEY FAILOVER]',JSON.stringify({key:slot.index+1,status:e?.status||e?.code||null,error:String(e?.message||e||'').slice(0,300),cooldownMs:slot.cooldownUntil-Date.now()}));
         if(isProjectQuotaError(e)){
-          const err=new Error('Gemini project quota exhausted: מכסת Gemini של הפרויקט נגמרה.');err.code='PROJECT_QUOTA';throw err;
+          projectQuotaCooldownUntil=Date.now()+Number(process.env.GEMINI_PROJECT_QUOTA_COOLDOWN_MS||300000);
+          projectQuotaMessage='מכסת Gemini של הפרויקט נוצלה. מפתחות נוספים באותו פרויקט לא מוסיפים מכסה; יש להמתין לאיפוס המכסה או לחבר פרויקט Gemini עם מכסה זמינה.';
+          const err=new Error(projectQuotaMessage);err.code='PROJECT_QUOTA';throw err;
         }
         if(!isRetryableGeminiError(e))throw e;
       }
@@ -161,6 +168,7 @@ async function askGemini(audioBuffer,mime='audio/wav',phoneNumber=''){
         return {answer:finalAnswer,transcript};
       });
     }catch(e){
+      if(e?.code==='PROJECT_QUOTA_COOLDOWN') throw e;
       if(e?.code==='PROJECT_QUOTA'){
         lastQuotaError=e;
         if(activeModel!==models.at(-1)){
@@ -179,7 +187,7 @@ async function handler(call){
     const downloaded=await downloadYemotAudio(path),originalAudio=downloaded.buffer,audio=resampleWavTo16k(originalAudio);if(audio!==originalAudio)console.log('[AUDIO RESAMPLE]',JSON.stringify({from:downloaded.info?.fmt?.sampleRate||0,to:16000,bytesIn:originalAudio.length,bytesOut:audio.length}));const answerResult=await askGemini(audio,downloaded.mime,p);const answer=answerResult.answer;if(!answer){throw new Error('Gemini returned no playable answer');}await add({phone:p,callId:id,userText:answerResult.transcript||'[הקלטה]',geminiText:answer});
     const answerMessages=splitForYemot(answer,700).map(part=>({type:'text',data:part}));answerMessages.push({type:'text',data:yemotText('להמשך השיחה הקישו 1. לסיום השיחה הקישו 2. אם לא הוקשה בחירה, השיחה תסתיים כדי למנוע חזרה על התשובה.')});console.log('[Gemini answer]',p,'chars='+answer.length,'chunks='+answerMessages.length);console.log('[YEMOT OUT]',p,'chars='+answer.length,'answer='+JSON.stringify(answer));
     const key=await call.read(answerMessages,'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'2',removeInvalidChars:true});console.log('[YEMOT INPUT]',p,'key='+JSON.stringify(key));if(String(key)==='2'||String(key)==='')break;
-  }}catch(e){console.error('[CALL ERROR]',p,e?.stack||e?.message||e);if(!(e instanceof ExitError))console.error('[call]',p,e?.message||e);try{await call.id_list_message([{type:'text',data:yemotText('אירעה תקלה זמנית. אנא נסו שוב מאוחר יותר.')}])}catch{}}finally{active.delete(id)}
+  }}catch(e){console.error('[CALL ERROR]',p,e?.stack||e?.message||e);if(!(e instanceof ExitError))console.error('[call]',p,e?.message||e);try{await call.id_list_message([{type:'text',data:yemotText('שירות הבינה המלאכותית אינו זמין כרגע בגלל מכסת שימוש. אנא נסו שוב מאוחר יותר.')}])}catch{}}finally{active.delete(id)}
 }
 async function historyHandler(call){const p=caller(call);try{const items=log.filter(x=>x.phone===p).slice(-20);if(!items.length){await call.id_list_message([{type:'text',data:yemotText('אין עדיין היסטוריית שיחות עבור המספר הזה.')}]);return}const text=items.map((x,i)=>'שיחה '+(i+1)+': '+clean(x.gemini)).join(' | ');await call.id_list_message([{type:'text',data:yemotText('היסטוריית השיחות האחרונות: '+text)}])}catch(e){if(!(e instanceof ExitError))console.error('[history]',e?.message||e)}}
 const router=YemotRouter({
