@@ -59,6 +59,38 @@ function detectAudio(buffer){
   return {mime:'application/octet-stream',kind:'unknown',size:buffer.length};
 }
 
+function resampleWavTo16k(buffer){
+  const info=detectAudio(buffer);
+  if(info.kind!=='wav'||!info.fmt||info.fmt.audioFormat!==1||info.fmt.channels!==1||info.fmt.bitsPerSample!==16||info.fmt.sampleRate===16000) return buffer;
+  let offset=12,dataStart=-1,dataSize=0;
+  while(offset+8<=buffer.length){
+    const id=buffer.subarray(offset,offset+4).toString('ascii');
+    const size=buffer.readUInt32LE(offset+4);
+    if(id==='data'){dataStart=offset+8;dataSize=Math.min(size,buffer.length-dataStart);break}
+    offset+=8+size+(size%2);
+  }
+  if(dataStart<0||dataSize<2) return buffer;
+  const input=buffer.subarray(dataStart,dataStart+dataSize);
+  const samples=new Int16Array(Math.floor(input.length/2));
+  for(let i=0;i<samples.length;i++) samples[i]=input.readInt16LE(i*2);
+  const outLength=Math.max(1,Math.round(samples.length*16000/info.fmt.sampleRate));
+  const out=new Int16Array(outLength);
+  const ratio=(samples.length-1)/Math.max(1,outLength-1);
+  for(let i=0;i<outLength;i++){
+    const pos=i*ratio, a=Math.floor(pos), b=Math.min(a+1,samples.length-1), t=pos-a;
+    out[i]=Math.round(samples[a]+(samples[b]-samples[a])*t);
+  }
+  const header=Buffer.alloc(44);
+  header.write('RIFF',0); header.writeUInt32LE(36+out.length*2,4); header.write('WAVE',8);
+  header.write('fmt ',12); header.writeUInt32LE(16,16); header.writeUInt16LE(1,20);
+  header.writeUInt16LE(1,22); header.writeUInt32LE(16000,24); header.writeUInt32LE(32000,28);
+  header.writeUInt16LE(2,32); header.writeUInt16LE(16,34); header.write('data',36);
+  header.writeUInt32LE(out.length*2,40);
+  const pcm=Buffer.alloc(out.length*2);
+  for(let i=0;i<out.length;i++) pcm.writeInt16LE(out[i],i*2);
+  return Buffer.concat([header,pcm]);
+}
+
 function normalizeDownloaded(value){
   if(Buffer.isBuffer(value)) return value;
   if(value instanceof Uint8Array) return Buffer.from(value);
@@ -113,7 +145,9 @@ async function handler(call){
       if(!path) continue;
       if(!yemot) throw new Error('YEMOT_API_KEY לא מוגדר');
       const downloaded=await downloadYemotAudio(path);
-      const audio=downloaded.buffer;
+      const originalAudio=downloaded.buffer;
+      const audio=resampleWavTo16k(originalAudio);
+      if(audio!==originalAudio) console.log('[AUDIO RESAMPLE]',JSON.stringify({from:downloaded.info?.fmt?.sampleRate||0,to:16000,bytesIn:originalAudio.length,bytesOut:audio.length}));
       const answer=await askGemini(audio,downloaded.mime,p);
       await add({phone:p,callId:id,userText:'[הקלטה]',geminiText:answer});
       const answerMessages=splitForYemot(answer,700).map(part=>({type:'text',data:part}));
