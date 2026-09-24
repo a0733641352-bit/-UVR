@@ -32,14 +32,68 @@ const [YEMOT_NUMBER,YEMOT_PASSWORD]=YEMOT_TOKEN.split(':');
 const yemot=(YEMOT_NUMBER&&YEMOT_PASSWORD)?new YemotApi(YEMOT_NUMBER,YEMOT_PASSWORD):null;
 function extractTransfer(text){const raw=String(text||'');return {answer:raw.replace(/TRANSFER_TO:\s*\/?[0-9]+(?:\/[0-9]+)*/ig,'').replace(/\s+/g,' ').trim(),transfer:null};}
 async function timeout(p,ms=TIMEOUT){return await Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('Gemini request timeout')),ms))])}
-function wavMime(){return 'audio/wav'}
-async function askGemini(audioBuffer,phoneNumber=''){
+function detectAudio(buffer){
+  if(!Buffer.isBuffer(buffer)) buffer=Buffer.from(buffer||'');
+  if(buffer.length>=12 && buffer.subarray(0,4).toString('ascii')==='RIFF' && buffer.subarray(8,12).toString('ascii')==='WAVE'){
+    let offset=12,fmt=null,dataBytes=0;
+    while(offset+8<=buffer.length){
+      const id=buffer.subarray(offset,offset+4).toString('ascii');
+      const size=buffer.readUInt32LE(offset+4);
+      if(id==='fmt ' && offset+8+size<=buffer.length && size>=16){
+        fmt={
+          audioFormat:buffer.readUInt16LE(offset+8),
+          channels:buffer.readUInt16LE(offset+10),
+          sampleRate:buffer.readUInt32LE(offset+12),
+          bitsPerSample:buffer.readUInt16LE(offset+22)
+        };
+      }
+      if(id==='data'){dataBytes=size;break}
+      offset += 8 + size + (size%2);
+    }
+    return {mime:'audio/wav',kind:'wav',size:buffer.length,fmt,dataBytes};
+  }
+  if(buffer.subarray(0,3).toString('ascii')==='ID3' || (buffer.length>=2 && buffer[0]===0xff && (buffer[1]&0xe0)===0xe0))
+    return {mime:'audio/mpeg',kind:'mpeg',size:buffer.length};
+  if(buffer.subarray(0,4).toString('ascii')==='OggS')
+    return {mime:'audio/ogg',kind:'ogg',size:buffer.length};
+  return {mime:'application/octet-stream',kind:'unknown',size:buffer.length};
+}
+
+function normalizeDownloaded(value){
+  if(Buffer.isBuffer(value)) return value;
+  if(value instanceof Uint8Array) return Buffer.from(value);
+  if(value instanceof ArrayBuffer) return Buffer.from(value);
+  if(value && Buffer.isBuffer(value.data)) return value.data;
+  if(value && value.data instanceof Uint8Array) return Buffer.from(value.data);
+  if(value && value.buffer instanceof ArrayBuffer) return Buffer.from(value.buffer);
+  if(typeof value==='string'){
+    const m=value.match(/^data:[^;]+;base64,(.*)$/s);
+    const raw=m?m[1]:value;
+    try{return Buffer.from(raw.replace(/\s+/g,''),'base64')}catch{}
+  }
+  return Buffer.from(value||'');
+}
+
+async function downloadYemotAudio(path){
+  if(!YEMOT_TOKEN) throw new Error('YEMOT_API_KEY לא מוגדר');
+  const url='https://www.call2all.co.il/ym/api/DownloadFile?'+new URLSearchParams({token:YEMOT_TOKEN,path:'ivr2:'+String(path)});
+  const r=await fetch(url,{signal:AbortSignal.timeout(30000)});
+  if(!r.ok) throw new Error('Yemot DownloadFile HTTP '+r.status);
+  const b=Buffer.from(await r.arrayBuffer());
+  const info=detectAudio(b);
+  console.log('[AUDIO]',JSON.stringify({path,size:b.length,kind:info.kind,mime:info.mime,format:info.fmt||null,dataBytes:info.dataBytes||0}));
+  if(!b.length) throw new Error('הקלטה ריקה');
+  if(info.kind==='unknown') throw new Error('פורמט אודיו לא מזוהה');
+  return {buffer:b,mime:info.mime,info};
+}
+
+async function askGemini(audioBuffer,mime='audio/wav',phoneNumber=''){
   if(!clients.length) throw new Error('GEMINI_API_KEY לא מוגדר');
   let last;
   for(let i=0;i<clients.length;i++){
     try{
       const ai=clients[i];
-      const parts=[{text:'הקלטה זו מכילה את השאלה של המתקשר. קודם כל הבן את תוכן ההקלטה ורק לאחר מכן ענה על השאלה. אל תשתמש במשפט "אריה AI פיתח אותי" אלא אם השאלה עוסקת במפורש בזהות המפתח או היוצר של המערכת. אם השאלה ברורה, ענה עליה ישירות בעברית. אם ההקלטה אינה מובנת, אמור: "לא הצלחתי להבין את השאלה, אנא הקלט שוב." '+(ANSWER_LENGTH==='long'?'תן תשובה מפורטת.':'ענה בקצרה אך בצורה מועילה.')},{inlineData:{mimeType:wavMime(),data:audioBuffer.toString('base64')}}];
+      const parts=[{text:'הקלטה זו מכילה את השאלה של המתקשר. קודם כל הבן את תוכן ההקלטה ורק לאחר מכן ענה על השאלה. אל תשתמש במשפט "אריה AI פיתח אותי" אלא אם השאלה עוסקת במפורש בזהות המפתח או היוצר של המערכת. אם השאלה ברורה, ענה עליה ישירות בעברית. אם ההקלטה אינה מובנת, אמור: "לא הצלחתי להבין את השאלה, אנא הקלט שוב." '+(ANSWER_LENGTH==='long'?'תן תשובה מפורטת.':'ענה בקצרה אך בצורה מועילה.')},{inlineData:{mimeType,data:audioBuffer.toString('base64')}}];
       const config={systemInstruction:SYSTEM};
       if(SEARCH) config.tools=[{googleSearch:{}}];
       const r=await timeout(ai.models.generateContent({model:MODEL,contents:[{role:'user',parts}],config}),TIMEOUT);
@@ -58,10 +112,9 @@ async function handler(call){
       console.log('[YEMOT RECORD] waiting',p); const path=await call.read([{type:'text',data:yemotText('שלום, זה ג׳מיניפון. הקלט את השאלה שלך ולאחר מכן הקש סולמית.')}],'record',{min_length:1,max_length:60,no_confirm_menu:true,removeInvalidChars:true}); console.log('[YEMOT RECORD] received',p,JSON.stringify(path));
       if(!path) continue;
       if(!yemot) throw new Error('YEMOT_API_KEY לא מוגדר');
-      const downloaded=await yemot.download_file('ivr2:'+path);
-      const audio=Buffer.isBuffer(downloaded)?downloaded:Buffer.isBuffer(downloaded?.data)?downloaded.data:Buffer.from(downloaded?.buffer||downloaded||'');
-      if(!audio.length) throw new Error('לא התקבלה הקלטה');
-      const answer=await askGemini(audio,p);
+      const downloaded=await downloadYemotAudio(path);
+      const audio=downloaded.buffer;
+      const answer=await askGemini(audio,downloaded.mime,p);
       await add({phone:p,callId:id,userText:'[הקלטה]',geminiText:answer});
       const answerMessages=splitForYemot(answer,700).map(part=>({type:'text',data:part}));
       answerMessages.push({type:'text',data:yemotText('להמשך השיחה הקישו 1. לסיום השיחה הקישו 2.')});
