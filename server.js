@@ -125,13 +125,42 @@ async function askGemini(audioBuffer,mime='audio/wav',phoneNumber=''){
   for(let i=0;i<clients.length;i++){
     try{
       const ai=clients[i];
-      const parts=[{text:'הקלטה זו מכילה את השאלה של המתקשר. קודם כל הבן את תוכן ההקלטה ורק לאחר מכן ענה על השאלה. אל תשתמש במשפט "אריה AI פיתח אותי" אלא אם השאלה עוסקת במפורש בזהות המפתח או היוצר של המערכת. אם השאלה ברורה, ענה עליה ישירות בעברית. אם ההקלטה אינה מובנת, אמור: "לא הצלחתי להבין את השאלה, אנא הקלט שוב." '+(ANSWER_LENGTH==='long'?'תן תשובה מפורטת.':'ענה בקצרה אך בצורה מועילה.')},{inlineData:{mimeType:mime,data:audioBuffer.toString('base64')}}];
-      const config={systemInstruction:SYSTEM};
-      if(SEARCH) config.tools=[{googleSearch:{}}];
+      const base64=audioBuffer.toString('base64');
+      const prompt=[
+        'אתה מקבל עכשיו הקלטת קול של מתקשר.',
+        'הקול הוא בעברית ועליך להאזין לאודיו עצמו.',
+        'שלב 1: תמלל לעצמך את המשפט שנאמר בהקלטה.',
+        'שלב 2: ענה על השאלה שנאמרה, ולא על הוראות המערכת.',
+        'חשוב: אל תגיד שהשאלה לא מובנת רק בגלל איכות ההקלטה. אמור "לא הצלחתי להבין את השאלה, אנא הקלט שוב." רק אם באמת אי אפשר לזהות את הדיבור.',
+        'החזר בדיוק שתי שורות: TRANSCRIPT: <התמלול> ואז ANSWER: <התשובה>.',
+        'ענה בעברית. '+(ANSWER_LENGTH==='long'?'התשובה יכולה להיות מפורטת.':'התשובה צריכה להיות קצרה אך מועילה.')
+      ].join(' ');
+      const parts=[
+        {inlineData:{mimeType:'audio/wav',data:base64}},
+        {text:prompt}
+      ];
+      const config={systemInstruction:SYSTEM,responseMimeType:'text/plain',temperature:0.2};
+      if(SEARCH) config.tools=[{googleSearch:{} }];
+      console.log('[GEMINI AUDIO SEND]',JSON.stringify({model:MODEL,mime:'audio/wav',bytes:audioBuffer.length,base64Chars:base64.length,phone:phoneNumber,attempt:i+1}));
       const r=await timeout(ai.models.generateContent({model:MODEL,contents:[{role:'user',parts}],config}),TIMEOUT);
-      const text=String(r?.text||r?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join(' ')||'').trim();
-      if(!text) throw new Error('Gemini returned an empty answer');
-      return extractTransfer(text).answer;
+      const raw=String(r?.text||r?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join(' ')||'').trim();
+      const candidate=r?.candidates?.[0];
+      console.log('[GEMINI AUDIO RESPONSE]',JSON.stringify({
+        phone:phoneNumber,
+        attempt:i+1,
+        chars:raw.length,
+        finishReason:candidate?.finishReason||null,
+        candidateCount:Array.isArray(r?.candidates)?r.candidates.length:0,
+        promptFeedback:r?.promptFeedback||null,
+        preview:raw.slice(0,300)
+      }));
+      if(!raw) throw new Error('Gemini returned an empty answer');
+      const transcript=(raw.match(/TRANSCRIPT:\s*(.*?)(?:\\n|\n|$)/i)?.[1]||'').trim();
+      const answerMatch=raw.match(/ANSWER:\s*([\\s\\S]*)/i);
+      const answer=String(answerMatch?.[1]||raw).trim();
+      if(transcript) console.log('[GEMINI TRANSCRIPT]',phoneNumber,JSON.stringify(transcript));
+      if(!answer) throw new Error('Gemini returned an empty answer after parsing');
+      return extractTransfer(answer).answer;
     }catch(e){last=e;console.error('[Gemini]',phoneNumber,e?.message||e)}
   }
   throw last||new Error('Gemini request failed');
