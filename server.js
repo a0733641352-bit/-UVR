@@ -55,7 +55,7 @@ async function handler(call){
   active.set(id,{id,phone:p,since:new Date().toISOString()});
   try{
     while(true){
-      const path=await call.read([{type:'text',data:yemotText('שלום, זה ג׳מיניפון. הקלט את השאלה שלך ולאחר מכן הקש סולמית.')}],'record',{min_length:1,max_length:60,no_confirm_menu:true,removeInvalidChars:true});
+      console.log('[YEMOT RECORD] waiting',p); const path=await call.read([{type:'text',data:yemotText('שלום, זה ג׳מיניפון. הקלט את השאלה שלך ולאחר מכן הקש סולמית.')}],'record',{min_length:1,max_length:60,no_confirm_menu:true,removeInvalidChars:true,prependToNextAction:true}); console.log('[YEMOT RECORD] received',p,JSON.stringify(path));
       if(!path) continue;
       if(!yemot) throw new Error('YEMOT_API_KEY לא מוגדר');
       const downloaded=await yemot.download_file('ivr2:'+path);
@@ -66,10 +66,11 @@ async function handler(call){
       const answerMessages=splitForYemot(answer,700).map(part=>({type:'text',data:part}));
       answerMessages.push({type:'text',data:yemotText('להמשך השיחה הקישו 1. לסיום השיחה הקישו 2.')});
       console.log('[Gemini answer]',p,'chars='+answer.length,'chunks='+answerMessages.length);
-      const key=await call.read(answerMessages,'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'1',removeInvalidChars:true});
+      console.log('[YEMOT OUT]',p,'chars='+answer.length,'answer='+JSON.stringify(answer)); const key=await call.read(answerMessages,'tap',{min_digits:1,max_digits:1,sec_wait:5,block_asterisk_key:false,allow_empty:true,empty_val:'1',removeInvalidChars:true,prependToNextAction:true}); console.log('[YEMOT INPUT]',p,'key='+JSON.stringify(key));
       if(String(key)==='2') break;
     }
   }catch(e){
+    console.error('[CALL ERROR]',p,e?.stack||e?.message||e);
     if(!(e instanceof ExitError)) console.error('[call]',p,e?.message||e);
     try{await call.id_list_message([{type:'text',data:yemotText('אירעה תקלה זמנית. אנא נסו שוב מאוחר יותר.')}])}catch{}
   }finally{active.delete(id)}
