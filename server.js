@@ -78,10 +78,21 @@ async function handler(call){
   }}catch(e){console.error('[CALL ERROR]',p,e?.stack||e?.message||e);if(!(e instanceof ExitError))console.error('[call]',p,e?.message||e);try{await call.id_list_message([{type:'text',data:yemotText('אירעה תקלה זמנית. אנא נסו שוב מאוחר יותר.')}])}catch{}}finally{active.delete(id)}
 }
 async function historyHandler(call){const p=caller(call);try{const items=log.filter(x=>x.phone===p).slice(-20);if(!items.length){await call.id_list_message([{type:'text',data:yemotText('אין עדיין היסטוריית שיחות עבור המספר הזה.')}]);return}const text=items.map((x,i)=>'שיחה '+(i+1)+': '+clean(x.gemini)).join(' | ');await call.id_list_message([{type:'text',data:yemotText('היסטוריית השיחות האחרונות: '+text)}])}catch(e){if(!(e instanceof ExitError))console.error('[history]',e?.message||e)}}
-const router=YemotRouter({printLog:true,defaults:{removeInvalidChars:true,read:{timeout:90000}},uncaughtErrorHandler:async(e,call)=>{console.error('[YEMOT UNCaught]',call?.callId||'unknown',e?.stack||e?.message||e);try{return await call.id_list_message([{type:'text',data:yemotText('אירעה תקלה זמנית. אנא נסו שוב.')}])}catch(x){console.error('[YEMOT ERROR RESPONSE]',x?.stack||x?.message||x)}});
+const router=YemotRouter({
+  printLog:true,
+  defaults:{removeInvalidChars:true,read:{timeout:90000}},
+  uncaughtErrorHandler:async(e,call)=>{
+    console.error('[YEMOT UNCaught]',call?.callId||'unknown',e?.stack||e?.message||e);
+    try{
+      return await call.id_list_message([{type:'text',data:yemotText('אירעה תקלה זמנית. אנא נסו שוב.')}]);
+    }catch(x){
+      console.error('[YEMOT ERROR RESPONSE]',x?.stack||x?.message||x);
+    }
+  }
+});
 router.get('/yemot',handler);router.get('/yemot-history',historyHandler);app.use(router);
 app.get('/api/conversations',(q,r)=>{const phoneFilter=String(q.query.phone||'').trim();const items=phoneFilter?log.filter(x=>x.phone===phoneFilter):log;const callers=[...new Set(log.map(x=>x.phone))].map(phone=>({phone,messages:log.filter(x=>x.phone===phone).length,lastMessage:log.filter(x=>x.phone===phone).at(-1)?.time||null}));r.json({conversations:items,callers,activeCalls:[...active.values()],totalMessages:items.length,totalCallers:callers.length,serverTime:new Date().toISOString(),model:MODEL,answerLength:ANSWER_LENGTH,historyPersistent:SUP})});
-app.get('/api/conversations/summary',(q,r)=>{const callers=[...new Set(log.map(x=>x.phone))).map(phone=>({phone,messages:log.filter(x=>x.phone===phone).length,history:log.filter(x=>x.phone===phone)}));r.json({callers,totalCallers:callers.length,totalMessages:log.length})});
+app.get('/api/conversations/summary',(q,r)=>{const callers=[...new Set(log.map(x=>x.phone))].map(phone=>({phone,messages:log.filter(x=>x.phone===phone).length,history:log.filter(x=>x.phone===phone)}));r.json({callers,totalCallers:callers.length,totalMessages:log.length})});
 app.get('/health',(q,r)=>r.json({ok:true,model:MODEL,geminiConfigured:!!clients.length,supabase:SUP,historyPersistent:SUP,answerLength:ANSWER_LENGTH,timezone:TIMEZONE}));
 app.get('/',(q,r)=>r.type('html').send('<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>גימיני פון · מרכז השיחות</title></head><body><h1>גימיני פון</h1></body></html>'));
 async function configure(){const token=process.env.YEMOT_API_KEY?.trim(),base=(process.env.PUBLIC_BASE_URL||'').replace(/\/$/,'');if(!token||!base){console.log('Yemot auto setup skipped');return}const qs=new URLSearchParams({token,path:'ivr2:'+(process.env.YEMOT_AI_EXTENSION||'/9'),type:'api',api_link:base+'/yemot'});const historyQs=new URLSearchParams({token,path:'ivr2:'+(process.env.YEMOT_HISTORY_EXTENSION||'/8'),type:'api',api_link:base+'/yemot-history'});const r=await fetch('https://www.call2all.co.il/ym/api/UpdateExtension?'+qs);const t=await r.text();if(!r.ok)throw Error('Yemot setup HTTP '+r.status+': '+t);console.log('Yemot AI extension configured');const hr=await fetch('https://www.call2all.co.il/ym/api/UpdateExtension?'+historyQs);const ht=await hr.text();if(!hr.ok)throw Error('Yemot history setup HTTP '+hr.status+': '+ht);console.log('Yemot history extension configured')}
